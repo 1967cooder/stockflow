@@ -32,18 +32,56 @@ use StockFlow\Middleware\AuthMiddleware;
 // STUB: Returns empty array until students implement Exercise 3 (Step 2).
 // Replace the body of this route with your own logic.
 $app->get('/api/stock/movements', function (Request $request, Response $response) {
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
 
-    // TODO: Replace this with real data from Supabase
-    //
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // TODO: Read optional product_id filter from query params
-    // TODO: Build query with filters
-    // TODO: Post-process dates
-    // TODO: Return as JSON
+    $params = $request->getQueryParams();
+    $productId = trim((string)($params['product_id'] ?? ''));
 
-    $response->getBody()->write(json_encode([]));
+    $query = [
+        'select' => '*,products(name,sku)',
+        'order' => 'created_at.desc',
+    ];
+
+    if ($productId !== '') {
+        $query['product_id'] = 'eq.' . $productId;
+    }
+
+    $movements = $auth->query('stock_movements', $query);
+
+    $movements = array_map(function ($movement) {
+        $timestamp = isset($movement['created_at']) ? strtotime((string)$movement['created_at']) : false;
+        $createdDate = $movement['created_at'] ?? null;
+        $createdAgo = null;
+
+        if ($timestamp !== false) {
+            $createdDate = date('j M Y, H:i', $timestamp);
+            $daysAgo = (int)floor((time() - $timestamp) / 86400);
+
+            if ($daysAgo <= 0) {
+                $createdAgo = 'Today';
+            } elseif ($daysAgo === 1) {
+                $createdAgo = 'Yesterday';
+            } else {
+                $createdAgo = $daysAgo . ' days ago';
+            }
+        }
+
+        $productName = null;
+        if (isset($movement['products']['name'])) {
+            $productName = $movement['products']['name'];
+        } elseif (isset($movement['products'][0]['name'])) {
+            $productName = $movement['products'][0]['name'];
+        }
+
+        $movement['product_name'] = $productName;
+        $movement['created_date'] = $createdDate;
+        $movement['created_ago'] = $createdAgo;
+
+        return $movement;
+    }, $movements);
+
+    $response->getBody()->write(json_encode($movements));
     return $response->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
@@ -82,29 +120,86 @@ $app->get('/api/stock/movements', function (Request $request, Response $response
 // STUB: Returns "not implemented" until students implement Exercise 3 (Step 3).
 // Replace the body of this route with your own logic.
 $app->post('/api/stock/movements', function (Request $request, Response $response) {
+    $body = $request->getParsedBody();
+    $body = is_array($body) ? $body : [];
 
-    // $body = $request->getParsedBody();
-    //
-    // --- PRE-PROCESSING ---
-    // TODO: Validate required fields
-    // TODO: Check movement_type is valid
-    // TODO: For "out" type, verify enough stock exists
-    //
-    // --- INSERT MOVEMENT ---
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // TODO: Insert into stock_movements table
-    // TODO: Fetch current product stock_quantity
-    // TODO: Calculate new quantity based on movement_type
-    // TODO: Update product's stock_quantity
-    //
-    // --- POST-PROCESSING ---
-    // TODO: Return the movement and updated stock level
+    $productId = trim((string)($body['product_id'] ?? ''));
+    $quantity = $body['quantity'] ?? null;
+    $movementType = trim((string)($body['movement_type'] ?? ''));
+
+    if ($productId === '' || $quantity === null || !is_numeric($quantity) || (float)$quantity <= 0) {
+        $response->getBody()->write(json_encode([
+            'error' => 'product_id and quantity (> 0) are required'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    if (!in_array($movementType, ['in', 'out', 'adjustment'], true)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'movement_type must be in, out, or adjustment'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+
+    $productRows = $auth->query('products', [
+        'id' => 'eq.' . $productId,
+        'select' => 'id,name,stock_quantity',
+    ]);
+
+    if (empty($productRows)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Product not found'
+        ]));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
+
+    $product = $productRows[0];
+    $currentStock = (int)($product['stock_quantity'] ?? 0);
+    $quantity = (int)$quantity;
+
+    if ($movementType === 'in') {
+        $newStock = $currentStock + $quantity;
+    } elseif ($movementType === 'out') {
+        $newStock = $currentStock - $quantity;
+    } else {
+        $newStock = $quantity;
+    }
+
+    $created = $auth->insert('stock_movements', [
+        'product_id' => $productId,
+        'quantity' => $quantity,
+        'movement_type' => $movementType,
+        'reason' => trim((string)($body['reason'] ?? '')),
+        'notes' => trim((string)($body['notes'] ?? '')),
+    ]);
+
+    $auth->update('products', 'id=eq.' . $productId, [
+        'stock_quantity' => $newStock,
+    ]);
+
+    $movement = $created[0] ?? [];
+    $movement['product_name'] = $product['name'] ?? null;
+    $timestamp = isset($movement['created_at']) ? strtotime((string)$movement['created_at']) : false;
+    if ($timestamp !== false) {
+        $movement['created_date'] = date('j M Y, H:i', $timestamp);
+        $daysAgo = (int)floor((time() - $timestamp) / 86400);
+        if ($daysAgo <= 0) {
+            $movement['created_ago'] = 'Today';
+        } elseif ($daysAgo === 1) {
+            $movement['created_ago'] = 'Yesterday';
+        } else {
+            $movement['created_ago'] = $daysAgo . ' days ago';
+        }
+    }
 
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 3: POST /api/stock/movements is not implemented yet'
+        'message' => 'Stock movement recorded successfully',
+        'data' => $movement,
+        'stock_quantity' => $newStock,
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());

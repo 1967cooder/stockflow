@@ -40,26 +40,93 @@ use StockFlow\Middleware\AuthMiddleware;
 $app->get('/api/products', function (Request $request, Response $response) {
 
     $auth = new SupabaseAuth();
+    $authHeader = $request->getHeaderLine('Authorization');
+    if (preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
+        $auth->setToken(trim($matches[1]));
+    }
 
-    // --- PRE-PROCESSING (Exercise 2) ---
-    // TODO: Read query parameters from the request
-    // $params = $request->getQueryParams();
-    // $search = $params['search'] ?? null;
-    // $category = $params['category'] ?? null;
-    // ... then build $queryParams based on what was sent
+    $params = $request->getQueryParams();
+    $search = trim((string)($params['search'] ?? ''));
+    $category = trim((string)($params['category'] ?? ''));
+    $status = trim((string)($params['status'] ?? ''));
+    $page = (int)($params['page'] ?? 1);
+    $limit = (int)($params['limit'] ?? 50);
 
-    // Current query — fetches everything, no filtering
-    $products = $auth->query('products', [
-        'select' => '*,categories(name)',
-        'order' => 'name.asc'
-    ]);
+    if ($page < 1) {
+        $page = 1;
+    }
+
+    if ($limit < 1) {
+        $limit = 1;
+    }
+
+    if ($limit > 100) {
+        $limit = 100;
+    }
+
+    $offset = ($page - 1) * $limit;
+
+    $queryParams = [
+        'select' => $category !== '' ? '*,categories!inner(name)' : '*,categories(name)',
+        'order' => 'name.asc',
+        'offset' => (string)$offset,
+        'limit' => (string)$limit,
+    ];
+
+    if ($search !== '') {
+        $queryParams['name'] = 'ilike.*' . rawurlencode($search) . '*';
+    }
+
+    if ($category !== '') {
+        $queryParams['categories.name'] = 'eq.' . rawurlencode($category);
+    }
+
+    if ($status !== '') {
+        $queryParams['status'] = 'eq.' . rawurlencode($status);
+    }
+
+    $products = $auth->query('products', $queryParams);
 
     // --- POST-PROCESSING (Exercise 1) ---
     // TODO: Transform $products before sending to the frontend
     // Example: $processed = array_map(function ($product) { ... }, $products);
     // Then return $processed instead of $products
 
-    $response->getBody()->write(json_encode($products));
+    $processed = array_map(function ($product) {
+        $stockQuantity = (int)($product['stock_quantity'] ?? 0);
+        $reorderThreshold = (int)($product['reorder_threshold'] ?? 0);
+
+        if ($stockQuantity === 0) {
+            $stockStatus = 'out_of_stock';
+        } elseif ($stockQuantity <= $reorderThreshold) {
+            $stockStatus = 'low_stock';
+        } else {
+            $stockStatus = 'in_stock';
+        }
+
+        $categoryName = 'Uncategorized';
+        if (isset($product['categories']['name'])) {
+            $categoryName = $product['categories']['name'];
+        } elseif (isset($product['categories'][0]['name'])) {
+            $categoryName = $product['categories'][0]['name'];
+        }
+
+        return [
+            'id' => $product['id'] ?? null,
+            'name' => $product['name'] ?? '',
+            'sku' => $product['sku'] ?? '',
+            'price' => number_format((float)($product['price'] ?? 0), 2, '.', ''),
+            'description' => $product['description'] ?? '',
+            'stock_quantity' => $stockQuantity,
+            'stock_status' => $stockStatus,
+            'category_name' => $categoryName,
+            'category_id' => $product['category_id'] ?? null,
+            'image_url' => $product['image_url'] ?? null,
+            'status' => $product['status'] ?? null,
+        ];
+    }, $products);
+
+    $response->getBody()->write(json_encode($processed));
     return $response->withHeader('Content-Type', 'application/json');
 });
 
@@ -81,16 +148,22 @@ $app->get('/api/products', function (Request $request, Response $response) {
 $app->get('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
     $id = $args['id'];
-    // $auth = new SupabaseAuth();
-    //
-    // TODO: Query for a single product by ID
-    // TODO: Return 404 if not found
-    // TODO: Return the product as JSON
+    $auth = new SupabaseAuth();
 
-    $response->getBody()->write(json_encode([
-        'error' => 'Exercise 4: GET /api/products/{id} is not implemented yet'
-    ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    $product = $auth->query('products', [
+        'id' => 'eq.' . $id,
+        'select' => '*,categories(name)'
+    ]);
+
+    if (empty($product)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Product not found'
+        ]));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
+
+    $response->getBody()->write(json_encode($product[0]));
+    return $response->withHeader('Content-Type', 'application/json');
 
 });
 
@@ -116,33 +189,57 @@ $app->get('/api/products/{id}', function (Request $request, Response $response, 
 // STUB: Returns "not implemented" until students implement Exercise 4 (Step 2).
 $app->post('/api/products', function (Request $request, Response $response) {
 
-    // --- PRE-PROCESSING ---
-    // $body = $request->getParsedBody();
-    //
-    // TODO: Validate required fields (name, sku, price)
-    // TODO: Return 400 with error message if validation fails
-    //
-    // TODO: Sanitize and prepare data
-    // $data = [
-    //     'name' => trim($body['name']),
-    //     'sku' => trim($body['sku']),
-    //     'price' => (float)$body['price'],
-    //     'description' => trim($body['description'] ?? ''),
-    //     'image_url' => $body['image_url'] ?? null,
-    // ];
-    //
-    // --- QUERY SUPABASE ---
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    // $created = $auth->insert('products', $data);
-    //
-    // --- POST-PROCESSING ---
-    // TODO: Return the created product with 201 status
+    $body = $request->getParsedBody();
+    $body = is_array($body) ? $body : [];
+
+    $name = trim((string)($body['name'] ?? ''));
+    $sku = trim((string)($body['sku'] ?? ''));
+    $price = $body['price'] ?? null;
+
+    if ($name === '' || $sku === '' || $price === null || !is_numeric($price)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'name, sku and numeric price are required'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $data = [
+        'name' => $name,
+        'sku' => $sku,
+        'price' => (float)$price,
+        'description' => trim((string)($body['description'] ?? '')),
+    ];
+
+    if (array_key_exists('category_id', $body)) {
+        $categoryId = trim((string)$body['category_id']);
+        $data['category_id'] = $categoryId !== '' ? $categoryId : null;
+    }
+
+    if (array_key_exists('image_url', $body)) {
+        $imageUrl = trim((string)$body['image_url']);
+        $data['image_url'] = $imageUrl !== '' ? $imageUrl : null;
+    }
+
+    if (array_key_exists('status', $body)) {
+        $status = trim((string)$body['status']);
+        if (!in_array($status, ['active', 'archived'], true)) {
+            $response->getBody()->write(json_encode([
+                'error' => 'status must be active or archived'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+        $data['status'] = $status;
+    }
+
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+    $created = $auth->insert('products', $data);
 
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 4: POST /api/products is not implemented yet'
+        'message' => 'Product created successfully',
+        'data' => $created[0] ?? $created
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
 
@@ -162,17 +259,92 @@ $app->post('/api/products', function (Request $request, Response $response) {
 // STUB: Returns "not implemented" until students implement Exercise 4 (Step 3).
 $app->put('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
-    // $id = $args['id'];
-    // $body = $request->getParsedBody();
-    //
-    // TODO: Build $data with only the fields that were sent
-    // TODO: Validate — return 400 if $data is empty
-    // TODO: Update via Supabase and return result
+    $id = $args['id'];
+    $body = $request->getParsedBody();
+    $body = is_array($body) ? $body : [];
+
+    $data = [];
+
+    if (array_key_exists('name', $body)) {
+        $name = trim((string)$body['name']);
+        if ($name === '') {
+            $response->getBody()->write(json_encode([
+                'error' => 'name cannot be empty'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+        $data['name'] = $name;
+    }
+
+    if (array_key_exists('sku', $body)) {
+        $sku = trim((string)$body['sku']);
+        if ($sku === '') {
+            $response->getBody()->write(json_encode([
+                'error' => 'sku cannot be empty'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+        $data['sku'] = $sku;
+    }
+
+    if (array_key_exists('price', $body)) {
+        if ($body['price'] === '' || !is_numeric($body['price'])) {
+            $response->getBody()->write(json_encode([
+                'error' => 'price must be numeric'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+        $data['price'] = (float)$body['price'];
+    }
+
+    if (array_key_exists('description', $body)) {
+        $data['description'] = trim((string)$body['description']);
+    }
+
+    if (array_key_exists('category_id', $body)) {
+        $categoryId = trim((string)$body['category_id']);
+        $data['category_id'] = $categoryId !== '' ? $categoryId : null;
+    }
+
+    if (array_key_exists('image_url', $body)) {
+        $imageUrl = trim((string)$body['image_url']);
+        $data['image_url'] = $imageUrl !== '' ? $imageUrl : null;
+    }
+
+    if (array_key_exists('status', $body)) {
+        $status = trim((string)$body['status']);
+        if (!in_array($status, ['active', 'archived'], true)) {
+            $response->getBody()->write(json_encode([
+                'error' => 'status must be active or archived'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+        $data['status'] = $status;
+    }
+
+    if (empty($data)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'No fields to update'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+    $updated = $auth->update('products', 'id=eq.' . $id, $data);
+
+    if (empty($updated)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Product not found'
+        ]));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
 
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 4: PUT /api/products/{id} is not implemented yet'
+        'message' => 'Product updated successfully',
+        'data' => $updated[0]
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
 
@@ -192,15 +364,26 @@ $app->put('/api/products/{id}', function (Request $request, Response $response, 
 // STUB: Returns "not implemented" until students implement Exercise 4 (Step 4).
 $app->delete('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
-    // $id = $args['id'];
-    //
-    // TODO: Delete or archive the product
-    // TODO: Return confirmation
+    $id = $args['id'];
+
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+    $archived = $auth->update('products', 'id=eq.' . $id, [
+        'status' => 'archived'
+    ]);
+
+    if (empty($archived)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Product not found'
+        ]));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
 
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 4: DELETE /api/products/{id} is not implemented yet'
+        'message' => 'Product archived successfully',
+        'data' => $archived[0]
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());
 

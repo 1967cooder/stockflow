@@ -47,9 +47,30 @@ $app->get('/api/orders', function (Request $request, Response $response) {
         'order' => 'created_at.desc'
     ]);
 
-    // --- POST-PROCESSING (Exercise 3) ---
-    // TODO: Format dates and add computed time fields
-    // TODO: Format total_amount as currency
+    $orders = array_map(function ($order) {
+        $timestamp = isset($order['created_at']) ? strtotime((string)$order['created_at']) : false;
+        $createdDate = $order['created_at'] ?? null;
+        $createdAgo = null;
+
+        if ($timestamp !== false) {
+            $createdDate = date('j M Y, H:i', $timestamp);
+            $daysAgo = (int)floor((time() - $timestamp) / 86400);
+
+            if ($daysAgo <= 0) {
+                $createdAgo = 'Today';
+            } elseif ($daysAgo === 1) {
+                $createdAgo = 'Yesterday';
+            } else {
+                $createdAgo = $daysAgo . ' days ago';
+            }
+        }
+
+        $order['created_date'] = $createdDate;
+        $order['created_ago'] = $createdAgo;
+        $order['total_amount'] = number_format((float)($order['total_amount'] ?? 0), 2, '.', '');
+
+        return $order;
+    }, $orders);
 
     $response->getBody()->write(json_encode($orders));
     return $response->withHeader('Content-Type', 'application/json');

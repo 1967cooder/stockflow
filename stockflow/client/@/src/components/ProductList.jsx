@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { api } from '../services/api';
+import { useState, useEffect } from "react";
+import { api } from "../services/api";
 
 /**
  * ProductList — Displays products from the API
@@ -18,16 +18,47 @@ export default function ProductList() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const canDelete = Boolean(localStorage.getItem("supabase_token"));
 
   // Filter state — these get sent as query params to the backend
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('');
-  const [status, setStatus] = useState('active');
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("");
+  const [status, setStatus] = useState("active");
+
+  const handleSearchChange = (e) => {
+    setLoading(true);
+    setError(null);
+    setSearch(e.target.value);
+  };
+
+  const handleCategoryChange = (e) => {
+    setLoading(true);
+    setError(null);
+    setCategory(e.target.value);
+  };
+
+  const handleStatusChange = (e) => {
+    setLoading(true);
+    setError(null);
+    setStatus(e.target.value);
+  };
+
+  const handleDelete = async (product) => {
+    const confirmed = window.confirm(`Delete ${product.name}?`);
+    if (!confirmed) return;
+
+    setError(null);
+    try {
+      await api.deleteProduct(product.id);
+      setProducts((prev) => prev.filter((p) => p.id !== product.id));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   // Fetch products when filters change
   useEffect(() => {
-    setLoading(true);
-    setError(null);
+    let cancelled = false;
 
     // Build query params from the filter state
     // These are sent to: GET /api/products?search=...&category=...&status=...
@@ -37,14 +68,27 @@ export default function ProductList() {
     if (category) params.category = category;
     if (status) params.status = status;
 
-    api.getProducts(params)
+    api
+      .getProducts(params)
       .then((data) => {
+        if (cancelled) return;
         // The API might return { data: [...] } or just [...]
         // depending on how students structure the response
+        setError(null);
         setProducts(Array.isArray(data) ? data : data.data || []);
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [search, category, status]);
 
   return (
@@ -52,14 +96,21 @@ export default function ProductList() {
       <h2>Products</h2>
 
       {/* Filter controls — Exercise 2: backend must handle these params */}
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', flexWrap: 'wrap' }}>
+      <div
+        style={{
+          display: "flex",
+          gap: "10px",
+          marginBottom: "15px",
+          flexWrap: "wrap",
+        }}
+      >
         <input
           type="text"
           placeholder="Search products..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={handleSearchChange}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <select value={category} onChange={handleCategoryChange}>
           <option value="">All Categories</option>
           <option value="Audio">Audio</option>
           <option value="Cables & Adapters">Cables & Adapters</option>
@@ -68,7 +119,7 @@ export default function ProductList() {
           <option value="Mice & Peripherals">Mice & Peripherals</option>
           <option value="Power & Charging">Power & Charging</option>
         </select>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select value={status} onChange={handleStatusChange}>
           <option value="active">Active</option>
           <option value="archived">Archived</option>
           <option value="">All</option>
@@ -76,12 +127,18 @@ export default function ProductList() {
       </div>
 
       {loading && <p>Loading products...</p>}
-      {error && <p style={{ color: 'red' }}>Error: {error}</p>}
+      {error && <p style={{ color: "red" }}>Error: {error}</p>}
 
       {!loading && !error && (
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+        <table
+          style={{
+            width: "100%",
+            borderCollapse: "collapse",
+            textAlign: "left",
+          }}
+        >
           <thead>
-            <tr style={{ borderBottom: '2px solid #555' }}>
+            <tr style={{ borderBottom: "2px solid #555" }}>
               <th></th>
               <th>Name</th>
               <th>SKU</th>
@@ -89,11 +146,12 @@ export default function ProductList() {
               <th>Price</th>
               <th>Stock</th>
               <th>Status</th>
+              {canDelete && <th>Action</th>}
             </tr>
           </thead>
           <tbody>
             {products.map((product) => (
-              <tr key={product.id} style={{ borderBottom: '1px solid #333' }}>
+              <tr key={product.id} style={{ borderBottom: "1px solid #333" }}>
                 {/*
                   Exercise 8: The backend should include 'image_url' in the response.
                   Once students implement the upload, products will have image URLs.
@@ -104,10 +162,23 @@ export default function ProductList() {
                     <img
                       src={product.image_url}
                       alt={product.name}
-                      style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '4px' }}
+                      style={{
+                        width: "40px",
+                        height: "40px",
+                        objectFit: "cover",
+                        borderRadius: "4px",
+                      }}
                     />
                   ) : (
-                    <span style={{ display: 'inline-block', width: '40px', height: '40px', background: '#333', borderRadius: '4px' }} />
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: "40px",
+                        height: "40px",
+                        background: "#333",
+                        borderRadius: "4px",
+                      }}
+                    />
                   )}
                 </td>
                 <td>{product.name}</td>
@@ -117,7 +188,9 @@ export default function ProductList() {
                   Currently, category comes as product.categories.name (nested object).
                   Once students add post-processing, it should be product.category_name.
                 */}
-                <td>{product.category_name || product.categories?.name || '—'}</td>
+                <td>
+                  {product.category_name || product.categories?.name || "—"}
+                </td>
                 <td>{product.price}</td>
                 <td>{product.stock_quantity}</td>
                 {/*
@@ -126,11 +199,26 @@ export default function ProductList() {
                   Values: 'in_stock', 'low_stock', 'out_of_stock'
                 */}
                 <td>
-                  {product.stock_status === 'out_of_stock' && <span style={{ color: 'red' }}>Out of Stock</span>}
-                  {product.stock_status === 'low_stock' && <span style={{ color: 'orange' }}>Low Stock</span>}
-                  {product.stock_status === 'in_stock' && <span style={{ color: 'green' }}>In Stock</span>}
-                  {!product.stock_status && <span style={{ color: 'gray' }}>—</span>}
+                  {product.stock_status === "out_of_stock" && (
+                    <span style={{ color: "red" }}>Out of Stock</span>
+                  )}
+                  {product.stock_status === "low_stock" && (
+                    <span style={{ color: "orange" }}>Low Stock</span>
+                  )}
+                  {product.stock_status === "in_stock" && (
+                    <span style={{ color: "green" }}>In Stock</span>
+                  )}
+                  {!product.stock_status && (
+                    <span style={{ color: "gray" }}>—</span>
+                  )}
                 </td>
+                {canDelete && (
+                  <td>
+                    <button onClick={() => handleDelete(product)}>
+                      Delete
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

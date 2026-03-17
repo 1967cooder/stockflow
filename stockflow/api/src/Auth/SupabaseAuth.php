@@ -138,7 +138,9 @@ class SupabaseAuth
      */
     public function uploadFile(string $bucket, string $path, string $fileData, string $mimeType): array
     {
-        $url = $this->supabaseUrl . '/storage/v1/object/' . $bucket . '/' . $path;
+        $encodedBucket = rawurlencode($bucket);
+        $encodedPath = implode('/', array_map('rawurlencode', explode('/', $path)));
+        $url = $this->supabaseUrl . '/storage/v1/object/' . $encodedBucket . '/' . $encodedPath;
 
         $headers = [
             'apikey: ' . $this->supabaseKey,
@@ -184,7 +186,9 @@ class SupabaseAuth
      */
     public function getPublicUrl(string $bucket, string $path): string
     {
-        return $this->supabaseUrl . '/storage/v1/object/public/' . $bucket . '/' . $path;
+        $encodedBucket = rawurlencode($bucket);
+        $encodedPath = implode('/', array_map('rawurlencode', explode('/', $path)));
+        return $this->supabaseUrl . '/storage/v1/object/public/' . $encodedBucket . '/' . $encodedPath;
     }
 
     /**

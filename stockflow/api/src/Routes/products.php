@@ -67,7 +67,8 @@ $app->get('/api/products', function (Request $request, Response $response) {
     $offset = ($page - 1) * $limit;
 
     $queryParams = [
-        'select' => $category !== '' ? '*,categories!inner(name)' : '*,categories(name)',
+        'select' => $category !== '' ? '*,categories
+        !inner(name)' : '*,categories(name)',
         'order' => 'name.asc',
         'offset' => (string)$offset,
         'limit' => (string)$limit,
@@ -130,6 +131,23 @@ $app->get('/api/products', function (Request $request, Response $response) {
     return $response->withHeader('Content-Type', 'application/json');
 });
 
+    $app->get('/api/categories', function (Request $request, Response $response) {
+
+        $auth = new SupabaseAuth();
+        $authHeader = $request->getHeaderLine('Authorization');
+        if (preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
+            $auth->setToken(trim($matches[1]));
+        }
+
+        $categories = $auth->query('categories', [
+            'select' => 'id,name',
+            'order' => 'name.asc'
+        ]);
+
+        $response->getBody()->write(json_encode($categories));
+        return $response->withHeader('Content-Type', 'application/json');
+    });
+
 
 // ============================================================
 // GET /api/products/{id} — Get single product (public)
@@ -144,11 +162,14 @@ $app->get('/api/products', function (Request $request, Response $response) {
 //   - Return 404 if the product doesn't exist
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 4 (Step 1).
 $app->get('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
     $id = $args['id'];
     $auth = new SupabaseAuth();
+    $authHeader = $request->getHeaderLine('Authorization');
+    if (preg_match('/Bearer\s+(.+)/i', $authHeader, $matches)) {
+        $auth->setToken(trim($matches[1]));
+    }
 
     $product = $auth->query('products', [
         'id' => 'eq.' . $id,
@@ -186,7 +207,6 @@ $app->get('/api/products/{id}', function (Request $request, Response $response, 
 //   { name: "...", sku: "...", price: 29.99, description: "...", category_id: "uuid", image_url: "..." }
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 4 (Step 2).
 $app->post('/api/products', function (Request $request, Response $response) {
 
     $body = $request->getParsedBody();
@@ -233,7 +253,35 @@ $app->post('/api/products', function (Request $request, Response $response) {
 
     $auth = new SupabaseAuth();
     $auth->setToken($request->getAttribute('token'));
-    $created = $auth->insert('products', $data);
+    try {
+        $created = $auth->insert('products', $data);
+    } catch (\Throwable $e) {
+        $errorMessage = $e->getMessage();
+        $status = 500;
+
+        if (str_contains($errorMessage, 'Supabase error (401')) {
+            $status = 401;
+        } elseif (str_contains($errorMessage, 'Supabase error (403')) {
+            $status = 403;
+        } elseif (str_contains($errorMessage, 'Supabase error (409')) {
+            $status = 409;
+        } elseif (str_contains($errorMessage, 'Supabase error (400')) {
+            $status = 400;
+        }
+
+        if (stripos($errorMessage, 'row-level security') !== false || stripos($errorMessage, 'new row violates row-level security policy') !== false) {
+            $errorMessage = 'You do not have permission to create products. Your user must have admin or manager role in user_roles.';
+            $status = 403;
+        } elseif (stripos($errorMessage, 'duplicate key value violates unique constraint') !== false || stripos($errorMessage, 'products_sku_key') !== false) {
+            $errorMessage = 'SKU already exists. Please use a unique SKU.';
+            $status = 409;
+        }
+
+        $response->getBody()->write(json_encode([
+            'error' => $errorMessage
+        ]));
+        return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
+    }
 
     $response->getBody()->write(json_encode([
         'message' => 'Product created successfully',
@@ -256,7 +304,6 @@ $app->post('/api/products', function (Request $request, Response $response) {
 //   - Return 400 if no fields to update
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 4 (Step 3).
 $app->put('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
     $id = $args['id'];
@@ -361,7 +408,6 @@ $app->put('/api/products/{id}', function (Request $request, Response $response, 
 //   - Return a confirmation message
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 4 (Step 4).
 $app->delete('/api/products/{id}', function (Request $request, Response $response, array $args) {
 
     $id = $args['id'];
@@ -424,43 +470,90 @@ $app->delete('/api/products/{id}', function (Request $request, Response $respons
 //   - Bucket name: 'product-images' (must be created in Supabase first — see TASKS.md)
 // ============================================================
 
-// STUB: Returns "not implemented" until students implement Exercise 5.
 $app->post('/api/products/upload-image', function (Request $request, Response $response) {
 
-    // $files = $request->getUploadedFiles();
-    // $file = $files['image'] ?? null;
-    //
-    // --- PRE-PROCESSING ---
-    // TODO: Check that a file was uploaded
-    // if (!$file || $file->getError() !== UPLOAD_ERR_OK) { ... return 400 }
-    //
-    // TODO: Validate file type
-    // $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    // if (!in_array($file->getClientMediaType(), $allowedTypes)) { ... return 400 }
-    //
-    // TODO: Validate file size (max 5MB)
-    // if ($file->getSize() > 5 * 1024 * 1024) { ... return 400 }
-    //
-    // TODO: Generate unique filename
-    // $filename = uniqid() . '-' . $file->getClientFilename();
-    //
-    // --- UPLOAD TO SUPABASE STORAGE ---
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // $fileData = (string) $file->getStream();
-    // $auth->uploadFile('product-images', $filename, $fileData, $file->getClientMediaType());
-    //
-    // $publicUrl = $auth->getPublicUrl('product-images', $filename);
-    //
-    // --- POST-PROCESSING ---
-    // TODO: Return the public URL
-    // $response->getBody()->write(json_encode(['image_url' => $publicUrl]));
-    // return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
+    $files = $request->getUploadedFiles();
+    $file = $files['image'] ?? null;
+
+    if (!$file || $file->getError() !== UPLOAD_ERR_OK) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Image upload failed'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+    $mediaType = (string)$file->getClientMediaType();
+    if (!in_array($mediaType, $allowedTypes, true)) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Invalid image type. Allowed: jpeg, png, webp, gif'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    if ((int)$file->getSize() > 5 * 1024 * 1024) {
+        $response->getBody()->write(json_encode([
+            'error' => 'Image is too large. Max size is 5MB'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
+    $clientFilename = (string)$file->getClientFilename();
+    $safeFilename = preg_replace('/[^A-Za-z0-9._-]/', '-', $clientFilename);
+    if ($safeFilename === '' || $safeFilename === null) {
+        $safeFilename = 'image';
+    }
+    $filename = uniqid('', true) . '-' . $safeFilename;
+
+    try {
+        $auth = new SupabaseAuth();
+        $token = trim((string)$request->getAttribute('token'));
+        if ($token === '') {
+            $response->getBody()->write(json_encode([
+                'error' => 'Authentication token is missing'
+            ]));
+            return $response->withStatus(401)->withHeader('Content-Type', 'application/json');
+        }
+        $auth->setToken($token);
+
+        $fileData = (string)$file->getStream();
+        if ($fileData === '') {
+            $response->getBody()->write(json_encode([
+                'error' => 'Uploaded image is empty'
+            ]));
+            return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+        }
+
+        $auth->uploadFile('product-images', $filename, $fileData, $mediaType);
+
+        $publicUrl = $auth->getPublicUrl('product-images', $filename);
+    } catch (\Throwable $e) {
+        $errorMessage = $e->getMessage();
+        $status = 500;
+
+        if (str_contains($errorMessage, 'Storage error (401') || str_contains($errorMessage, 'Storage error (403')) {
+            $status = 401;
+        } elseif (str_contains($errorMessage, 'Storage error (400') || str_contains($errorMessage, 'Storage error (404') || str_contains($errorMessage, 'Storage error (409')) {
+            $status = 400;
+        }
+
+        if (stripos($errorMessage, 'Bucket not found') !== false) {
+            $errorMessage = 'Storage bucket product-images not found. Run the Supabase Storage setup SQL first.';
+            $status = 400;
+        } elseif (stripos($errorMessage, 'row-level security') !== false || stripos($errorMessage, 'new row violates row-level security policy') !== false) {
+            $errorMessage = 'Storage policy blocked upload. Verify product-images INSERT policy and sign in again.';
+            $status = 403;
+        }
+
+        $response->getBody()->write(json_encode([
+            'error' => 'Image upload failed: ' . $errorMessage
+        ]));
+        return $response->withStatus($status)->withHeader('Content-Type', 'application/json');
+    }
 
     $response->getBody()->write(json_encode([
-        'error' => 'Exercise 5: POST /api/products/upload-image is not implemented yet'
+        'image_url' => $publicUrl
     ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
 
 })->add(new AuthMiddleware());

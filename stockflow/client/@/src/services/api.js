@@ -32,6 +32,7 @@ export const api = {
     const query = new URLSearchParams(params).toString();
     return fetchApi(`/products${query ? '?' + query : ''}`);
   },
+  getCategories: () => fetchApi('/categories'),
   getProduct: (id) => fetchApi(`/products/${id}`),
   createProduct: (data) =>
     fetchApi('/products', { method: 'POST', body: JSON.stringify(data) }),

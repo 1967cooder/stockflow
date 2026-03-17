@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api } from '../services/api';
+import { useState, useEffect } from "react";
+import { api } from "../services/api";
 
 /**
  * ProductForm — Create or edit a product with image upload
@@ -22,20 +22,34 @@ export default function ProductForm({ product = null, onSaved = () => {} }) {
   const isEdit = !!product;
 
   const [form, setForm] = useState({
-    name: product?.name || '',
-    sku: product?.sku || '',
-    price: product?.price || '',
-    description: product?.description || '',
-    category_id: product?.category_id || '',
+    name: product?.name || "",
+    sku: product?.sku || "",
+    price: product?.price || "",
+    description: product?.description || "",
+    category_id: product?.category_id || "",
   });
 
   // Image state
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(product?.image_url || null);
   const [uploading, setUploading] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [loadingCategories, setLoadingCategories] = useState(true);
 
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setLoadingCategories(true);
+    api
+      .getCategories()
+      .then((data) => {
+        const rows = Array.isArray(data) ? data : data.data || [];
+        setCategories(rows.filter((row) => row?.id && row?.name));
+      })
+      .catch(() => setCategories([]))
+      .finally(() => setLoadingCategories(false));
+  }, []);
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
@@ -76,17 +90,23 @@ export default function ProductForm({ product = null, onSaved = () => {} }) {
 
       if (isEdit) {
         await api.updateProduct(product.id, productData);
-        setMessage({ type: 'success', text: 'Product updated!' });
+        setMessage({ type: "success", text: "Product updated!" });
       } else {
         await api.createProduct(productData);
-        setMessage({ type: 'success', text: 'Product created!' });
-        setForm({ name: '', sku: '', price: '', description: '', category_id: '' });
+        setMessage({ type: "success", text: "Product created!" });
+        setForm({
+          name: "",
+          sku: "",
+          price: "",
+          description: "",
+          category_id: "",
+        });
         setImageFile(null);
         setImagePreview(null);
       }
       onSaved();
     } catch (err) {
-      setMessage({ type: 'error', text: err.message });
+      setMessage({ type: "error", text: err.message });
       setUploading(false);
     } finally {
       setSaving(false);
@@ -95,27 +115,74 @@ export default function ProductForm({ product = null, onSaved = () => {} }) {
 
   return (
     <div>
-      <h3>{isEdit ? 'Edit Product' : 'New Product'}</h3>
+      <h3>{isEdit ? "Edit Product" : "New Product"}</h3>
 
       {message && (
-        <p style={{ color: message.type === 'error' ? 'red' : 'green' }}>
+        <p style={{ color: message.type === "error" ? "red" : "green" }}>
           {message.text}
         </p>
       )}
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxWidth: '400px' }}>
-        <input name="name" placeholder="Product name *" value={form.name} onChange={handleChange} required />
-        <input name="sku" placeholder="SKU (e.g. SKU-1234) *" value={form.sku} onChange={handleChange} required />
-        <input name="price" type="number" step="0.01" placeholder="Price *" value={form.price} onChange={handleChange} required />
-        <textarea name="description" placeholder="Description (optional)" value={form.description} onChange={handleChange} rows={3} />
-        <select name="category_id" value={form.category_id} onChange={handleChange}>
+      <form
+        onSubmit={handleSubmit}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+          maxWidth: "400px",
+        }}
+      >
+        <input
+          name="name"
+          placeholder="Product name *"
+          value={form.name}
+          onChange={handleChange}
+          required
+        />
+        <input
+          name="sku"
+          placeholder="SKU (e.g. SKU-1234) *"
+          value={form.sku}
+          onChange={handleChange}
+          required
+        />
+        <input
+          name="price"
+          type="number"
+          step="0.01"
+          placeholder="Price *"
+          value={form.price}
+          onChange={handleChange}
+          required
+        />
+        <textarea
+          name="description"
+          placeholder="Description (optional)"
+          value={form.description}
+          onChange={handleChange}
+          rows={3}
+        />
+        <select
+          name="category_id"
+          value={form.category_id}
+          onChange={handleChange}
+        >
           <option value="">Select category...</option>
-          {/* In a real app, you'd fetch categories from the API.
-              For now, students can hardcode or ignore this field. */}
+          {loadingCategories && (
+            <option value="" disabled>
+              Loading categories...
+            </option>
+          )}
+          {!loadingCategories &&
+            categories.map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
+            ))}
         </select>
 
         {/* Image upload */}
-        <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
           <span>Product Image</span>
           <input
             type="file"
@@ -130,13 +197,24 @@ export default function ProductForm({ product = null, onSaved = () => {} }) {
             <img
               src={imagePreview}
               alt="Preview"
-              style={{ maxWidth: '200px', maxHeight: '200px', borderRadius: '8px', border: '1px solid #444' }}
+              style={{
+                maxWidth: "200px",
+                maxHeight: "200px",
+                borderRadius: "8px",
+                border: "1px solid #444",
+              }}
             />
           </div>
         )}
 
         <button type="submit" disabled={saving || uploading}>
-          {uploading ? 'Uploading image...' : saving ? 'Saving...' : isEdit ? 'Update Product' : 'Create Product'}
+          {uploading
+            ? "Uploading image..."
+            : saving
+              ? "Saving..."
+              : isEdit
+                ? "Update Product"
+                : "Create Product"}
         </button>
       </form>
     </div>

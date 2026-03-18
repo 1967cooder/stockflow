@@ -15,6 +15,32 @@ use StockFlow\Auth\SupabaseAuth;
 use StockFlow\AI\GeminiAI;
 use StockFlow\Middleware\AuthMiddleware;
 
+$isAiQuotaError = function (string $message): bool {
+    $normalized = strtolower($message);
+    $needles = [
+        'quota exceeded',
+        'rate limit',
+        'resource_exhausted',
+        '429',
+        'too many requests',
+        'free_tier',
+    ];
+
+    foreach ($needles as $needle) {
+        if (str_contains($normalized, $needle)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+$aiFallbackEnabled = function (): bool {
+    $value = strtolower(trim((string)($_ENV['AI_FALLBACK_ENABLED'] ?? 'true')));
+    $value = trim($value, " \t\n\r\0\x0B.;,!");
+    return !in_array($value, ['0', 'false', 'off', 'no'], true);
+};
+
 // ============================================================
 // POST /api/ai/describe — Generate a product description
 // ============================================================
@@ -42,36 +68,75 @@ use StockFlow\Middleware\AuthMiddleware;
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 1).
 // Replace the body of this route with your own logic.
-$app->post('/api/ai/describe', function (Request $request, Response $response) {
+$app->post('/api/ai/describe', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
+    $body = $request->getParsedBody();
+    $body = is_array($body) ? $body : [];
+    $productId = trim((string)($body['product_id'] ?? ''));
 
-    // $body = $request->getParsedBody();
-    // $productId = $body['product_id'] ?? null;
-    //
-    // TODO: Validate product_id
-    //
-    // TODO: Fetch the product from Supabase
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    // $products = $auth->query('products', [
-    //     'id' => 'eq.' . $productId,
-    //     'select' => '*,categories(name)'
-    // ]);
-    //
-    // TODO: Build a prompt using the product data
-    // TODO: Send to Gemini and return the result
-    //
-    // try {
-    //     $ai = new GeminiAI();
-    //     $description = $ai->ask($prompt);
-    //     ...return JSON response with the description
-    // } catch (\Exception $e) {
-    //     ...return 500 error with message
-    // }
+    if ($productId === '') {
+        $response->getBody()->write(json_encode([
+            'error' => 'product_id is required'
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
 
-    $response->getBody()->write(json_encode([
-        'error' => 'Exercise 8: POST /api/ai/describe is not implemented yet'
-    ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
+
+    $name = '';
+    $category = 'Uncategorized';
+    $price = '0.00';
+
+    try {
+        $products = $auth->query('products', [
+            'id' => 'eq.' . $productId,
+            'select' => 'name,price,categories(name)'
+        ]);
+
+        if (empty($products)) {
+            $response->getBody()->write(json_encode([
+                'error' => 'Product not found'
+            ]));
+            return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+        }
+
+        $product = $products[0];
+        if (isset($product['categories']['name'])) {
+            $category = (string)$product['categories']['name'];
+        } elseif (isset($product['categories'][0]['name'])) {
+            $category = (string)$product['categories'][0]['name'];
+        }
+
+        $name = trim((string)($product['name'] ?? 'Unknown product'));
+        $price = number_format((float)($product['price'] ?? 0), 2, '.', '');
+        $prompt = 'Write a 2-3 sentence product description for: ' . $name . '. Category: ' . $category . '. Price: ' . $price . ' EUR.';
+
+        $ai = new GeminiAI();
+        $description = $ai->ask($prompt);
+
+        $response->getBody()->write(json_encode([
+            'description' => $description
+        ]));
+        return $response->withHeader('Content-Type', 'application/json');
+    } catch (\Throwable $e) {
+        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && $name !== '') {
+            $fallbackDescription = $name . ' is a ' . $category . ' product priced at ' . $price . ' EUR. '
+                . 'It offers reliable everyday performance and practical value for regular use. '
+                . 'This item is a strong choice for customers looking for quality at a balanced price point.';
+
+            $response->getBody()->write(json_encode([
+                'description' => $fallbackDescription,
+                'fallback' => true,
+                'reason' => 'quota_exceeded'
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        }
+
+        $response->getBody()->write(json_encode([
+            'error' => $e->getMessage()
+        ]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+    }
 
 })->add(new AuthMiddleware());
 
@@ -100,18 +165,89 @@ $app->post('/api/ai/describe', function (Request $request, Response $response) {
 // ============================================================
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 2).
-$app->post('/api/ai/stock-advice', function (Request $request, Response $response) {
+$app->post('/api/ai/stock-advice', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
 
-    // TODO: Fetch all products
-    // TODO: Filter to only those with stock_quantity <= reorder_threshold
-    // TODO: Build prompt with the low-stock items
-    // TODO: Ask Gemini for advice
-    // TODO: Return the advice and product data
+    $lowStockProducts = [];
 
-    $response->getBody()->write(json_encode([
-        'error' => 'Exercise 8: POST /api/ai/stock-advice is not implemented yet'
-    ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    try {
+        $products = $auth->query('products', [
+            'select' => 'id,name,sku,stock_quantity,reorder_threshold,price'
+        ]);
+
+        $lowStockProducts = array_values(array_filter($products, function ($product) {
+            $stockQuantity = (int)($product['stock_quantity'] ?? 0);
+            $reorderThreshold = (int)($product['reorder_threshold'] ?? 0);
+            return $stockQuantity <= $reorderThreshold;
+        }));
+
+        $lowStockProducts = array_map(function ($product) {
+            return [
+                'id' => $product['id'] ?? null,
+                'name' => (string)($product['name'] ?? ''),
+                'sku' => (string)($product['sku'] ?? ''),
+                'price' => number_format((float)($product['price'] ?? 0), 2, '.', ''),
+                'stock_quantity' => (int)($product['stock_quantity'] ?? 0),
+                'reorder_threshold' => (int)($product['reorder_threshold'] ?? 0),
+            ];
+        }, $lowStockProducts);
+
+        if (empty($lowStockProducts)) {
+            $response->getBody()->write(json_encode([
+                'advice' => 'All products are currently above their reorder thresholds.',
+                'products' => []
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        }
+
+        $itemsText = implode("\n", array_map(function ($product) {
+            return '- ' . $product['name'] . ': ' . $product['stock_quantity'] . ' in stock, threshold: ' . $product['reorder_threshold'];
+        }, $lowStockProducts));
+
+        $prompt = "These products are running low on stock. For each, suggest a reorder quantity based on the current stock and threshold:\n"
+            . $itemsText
+            . "\nGive a brief recommendation for each product.";
+
+        $ai = new GeminiAI();
+        $advice = $ai->ask($prompt);
+
+        $response->getBody()->write(json_encode([
+            'advice' => $advice,
+            'products' => $lowStockProducts
+        ]));
+        return $response->withHeader('Content-Type', 'application/json');
+    } catch (\Throwable $e) {
+        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && !empty($lowStockProducts)) {
+            $lines = array_map(function ($product) {
+                $stockQuantity = (int)($product['stock_quantity'] ?? 0);
+                $reorderThreshold = (int)($product['reorder_threshold'] ?? 0);
+                $deficit = max($reorderThreshold - $stockQuantity, 0);
+                $recommended = max($deficit + (int)ceil($reorderThreshold * 0.5), 1);
+
+                return '- ' . $product['name']
+                    . ': reorder about ' . $recommended
+                    . ' units (stock ' . $stockQuantity
+                    . ', threshold ' . $reorderThreshold . ')';
+            }, $lowStockProducts);
+
+            $fallbackAdvice = 'Gemini is currently unavailable due to quota limits. Suggested reorder quantities based on current thresholds:'
+                . "\n" . implode("\n", $lines);
+
+            $response->getBody()->write(json_encode([
+                'advice' => $fallbackAdvice,
+                'products' => $lowStockProducts,
+                'fallback' => true,
+                'reason' => 'quota_exceeded'
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        }
+
+        $response->getBody()->write(json_encode([
+            'error' => $e->getMessage()
+        ]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+    }
 
 })->add(new AuthMiddleware());
 
@@ -133,13 +269,81 @@ $app->post('/api/ai/stock-advice', function (Request $request, Response $respons
 // ============================================================
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 3).
-$app->post('/api/ai/summarize-orders', function (Request $request, Response $response) {
+$app->post('/api/ai/summarize-orders', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
 
-    // TODO: Implement this route
+    $orders = [];
 
-    $response->getBody()->write(json_encode([
-        'error' => 'Exercise 8: POST /api/ai/summarize-orders is not implemented yet'
-    ]));
-    return $response->withStatus(501)->withHeader('Content-Type', 'application/json');
+    try {
+        $sevenDaysAgo = gmdate('Y-m-d\TH:i:s\Z', strtotime('-7 days'));
+
+        $orders = $auth->query('orders', [
+            'select' => 'customer_name,status,total_amount,created_at',
+            'created_at' => 'gte.' . rawurlencode($sevenDaysAgo),
+            'order' => 'created_at.desc'
+        ]);
+
+        if (empty($orders)) {
+            $response->getBody()->write(json_encode([
+                'summary' => 'No orders found in the last 7 days.',
+                'orders' => []
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        }
+
+        $ordersText = implode("\n", array_map(function ($order) {
+            return '- Customer: ' . (string)($order['customer_name'] ?? 'Unknown')
+                . ', Total: ' . number_format((float)($order['total_amount'] ?? 0), 2, '.', '')
+                . ' EUR, Status: ' . (string)($order['status'] ?? 'unknown');
+        }, $orders));
+
+        $prompt = "Summarize the following recent orders from the last 7 days. Identify key trends, notable statuses, and any operational insights:\n"
+            . $ordersText;
+
+        $ai = new GeminiAI();
+        $summary = $ai->ask($prompt);
+
+        $response->getBody()->write(json_encode([
+            'summary' => $summary,
+            'orders' => $orders
+        ]));
+        return $response->withHeader('Content-Type', 'application/json');
+    } catch (\Throwable $e) {
+        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && !empty($orders)) {
+            $statusCounts = [];
+            $totalAmount = 0.0;
+
+            foreach ($orders as $order) {
+                $status = (string)($order['status'] ?? 'unknown');
+                $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
+                $totalAmount += (float)($order['total_amount'] ?? 0);
+            }
+
+            $orderCount = count($orders);
+            $averageAmount = $orderCount > 0 ? number_format($totalAmount / $orderCount, 2, '.', '') : '0.00';
+            arsort($statusCounts);
+            $topStatus = array_key_first($statusCounts) ?: 'unknown';
+            $topStatusCount = $statusCounts[$topStatus] ?? 0;
+
+            $fallbackSummary = 'Gemini is currently unavailable due to quota limits. '
+                . 'In the last 7 days there were ' . $orderCount . ' orders with total value '
+                . number_format($totalAmount, 2, '.', '') . ' EUR and average order value ' . $averageAmount . ' EUR. '
+                . 'The most common status is ' . $topStatus . ' (' . $topStatusCount . ' orders).';
+
+            $response->getBody()->write(json_encode([
+                'summary' => $fallbackSummary,
+                'orders' => $orders,
+                'fallback' => true,
+                'reason' => 'quota_exceeded'
+            ]));
+            return $response->withHeader('Content-Type', 'application/json');
+        }
+
+        $response->getBody()->write(json_encode([
+            'error' => $e->getMessage()
+        ]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+    }
 
 })->add(new AuthMiddleware());

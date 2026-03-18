@@ -65,52 +65,90 @@ use StockFlow\Middleware\AuthMiddleware;
 // Replace the body of this route with your own logic.
 $app->get('/api/dashboard/summary', function (Request $request, Response $response) {
 
-    // TODO: Replace this placeholder with real data from Supabase
-    //
-    // $auth = new SupabaseAuth();
-    // $auth->setToken($request->getAttribute('token'));
-    //
-    // TODO: Fetch products and orders from Supabase
-    //
-    // TODO: Calculate inventory stats
-    // $totalValue = 0;
-    // $lowStock = [];
-    // $outOfStock = 0;
-    // foreach ($products as $product) { ... }
-    //
-    // TODO: Calculate order stats
-    // $ordersByStatus = ['draft' => 0, 'confirmed' => 0, ...];
-    // $revenue = 0;
-    // foreach ($orders as $order) { ... }
-    //
-    // TODO: Sort low stock products by urgency (lowest stock first)
-    // usort($lowStock, function ($a, $b) {
-    //     return $a['stock_quantity'] - $b['stock_quantity'];
-    // });
+    $auth = new SupabaseAuth();
+    $auth->setToken($request->getAttribute('token'));
 
-    // Placeholder response — shows the structure students need to build
-    $placeholder = [
-        'inventory' => [
-            'total_products' => 0,
-            'total_value' => 0.00,
-            'low_stock_count' => 0,
-            'out_of_stock_count' => 0
-        ],
-        'orders' => [
-            'total_orders' => 0,
-            'by_status' => [
-                'draft' => 0,
-                'confirmed' => 0,
-                'fulfilled' => 0,
-                'cancelled' => 0
+    try {
+        $products = $auth->query('products', [
+            'select' => 'name,price,stock_quantity,reorder_threshold'
+        ]);
+
+        $orders = $auth->query('orders', [
+            'select' => 'status,total_amount'
+        ]);
+
+        $totalProducts = count($products);
+        $totalValue = array_sum(array_map(
+            fn($product) => (float)($product['price'] ?? 0) * (int)($product['stock_quantity'] ?? 0),
+            $products
+        ));
+
+        $outOfStockCount = count(array_filter(
+            $products,
+            fn($product) => (int)($product['stock_quantity'] ?? 0) === 0
+        ));
+
+        $lowStockProducts = array_values(array_filter(
+            $products,
+            fn($product) =>
+                (int)($product['stock_quantity'] ?? 0) > 0 &&
+                (int)($product['stock_quantity'] ?? 0) <= (int)($product['reorder_threshold'] ?? 0)
+        ));
+
+        $lowStockCount = count($lowStockProducts);
+
+        usort($lowStockProducts, fn($a, $b) => (int)$a['stock_quantity'] <=> (int)$b['stock_quantity']);
+
+        $lowStockProducts = array_map(
+            fn($product) => [
+                'name' => (string)($product['name'] ?? ''),
+                'stock_quantity' => (int)($product['stock_quantity'] ?? 0),
+                'reorder_threshold' => (int)($product['reorder_threshold'] ?? 0),
             ],
-            'total_revenue' => 0.00
-        ],
-        'low_stock_products' => [],
-        '_message' => 'Exercise 7: Replace this placeholder with real calculations!'
-    ];
+            array_slice($lowStockProducts, 0, 5)
+        );
 
-    $response->getBody()->write(json_encode($placeholder));
-    return $response->withHeader('Content-Type', 'application/json');
+        $orderStatuses = [
+            'draft' => 0,
+            'confirmed' => 0,
+            'fulfilled' => 0,
+            'cancelled' => 0,
+        ];
+
+        foreach ($orders as $order) {
+            $status = (string)($order['status'] ?? '');
+            if (array_key_exists($status, $orderStatuses)) {
+                $orderStatuses[$status]++;
+            }
+        }
+
+        $totalRevenue = array_sum(array_map(
+            fn($order) => (string)($order['status'] ?? '') === 'fulfilled' ? (float)($order['total_amount'] ?? 0) : 0,
+            $orders
+        ));
+
+        $summary = [
+            'inventory' => [
+                'total_products' => $totalProducts,
+                'total_value' => number_format($totalValue, 2, '.', ''),
+                'low_stock_count' => $lowStockCount,
+                'out_of_stock_count' => $outOfStockCount,
+            ],
+            'orders' => [
+                'total_orders' => count($orders),
+                'by_status' => $orderStatuses,
+                'total_revenue' => number_format($totalRevenue, 2, '.', ''),
+            ],
+            'low_stock_products' => $lowStockProducts,
+        ];
+
+        $response->getBody()->write(json_encode($summary));
+        return $response->withHeader('Content-Type', 'application/json');
+    } catch (\Throwable $e) {
+        $response->getBody()->write(json_encode([
+            'error' => $e->getMessage()
+        ]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
+    }
 
 })->add(new AuthMiddleware());

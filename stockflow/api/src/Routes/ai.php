@@ -15,31 +15,31 @@ use StockFlow\Auth\SupabaseAuth;
 use StockFlow\AI\GeminiAI;
 use StockFlow\Middleware\AuthMiddleware;
 
-$isAiQuotaError = function (string $message): bool {
-    $normalized = strtolower($message);
-    $needles = [
-        'quota exceeded',
-        'rate limit',
-        'resource_exhausted',
-        '429',
-        'too many requests',
-        'free_tier',
-    ];
+// $isAiQuotaError = function (string $message): bool {
+//     $normalized = strtolower($message);
+//     $needles = [
+//         'quota exceeded',
+//         'rate limit',
+//         'resource_exhausted',
+//         '429',
+//         'too many requests',
+//         'free_tier',
+//     ];
 
-    foreach ($needles as $needle) {
-        if (str_contains($normalized, $needle)) {
-            return true;
-        }
-    }
+//     foreach ($needles as $needle) {
+//         if (str_contains($normalized, $needle)) {
+//             return true;
+//         }
+//     }
 
-    return false;
-};
+//     return false;
+// };
 
-$aiFallbackEnabled = function (): bool {
-    $value = strtolower(trim((string)($_ENV['AI_FALLBACK_ENABLED'] ?? 'true')));
-    $value = trim($value, " \t\n\r\0\x0B.;,!");
-    return !in_array($value, ['0', 'false', 'off', 'no'], true);
-};
+// $aiFallbackEnabled = function (): bool {
+//     $value = strtolower(trim((string)($_ENV['AI_FALLBACK_ENABLED'] ?? 'true')));
+//     $value = trim($value, " \t\n\r\0\x0B.;,!");
+//     return !in_array($value, ['0', 'false', 'off', 'no'], true);
+// };
 
 // ============================================================
 // POST /api/ai/describe — Generate a product description
@@ -68,49 +68,39 @@ $aiFallbackEnabled = function (): bool {
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 1).
 // Replace the body of this route with your own logic.
-$app->post('/api/ai/describe', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
-    $body = $request->getParsedBody();
-    $body = is_array($body) ? $body : [];
-    $productId = trim((string)($body['product_id'] ?? ''));
+$app->post('/api/ai/describe', function (Request $request, Response $response) {
 
-    if ($productId === '') {
-        $response->getBody()->write(json_encode([
-            'error' => 'product_id is required'
-        ]));
+    $body = $request->getParsedBody();
+    $productId = $body['product_id'] ?? null;
+
+    if (!$productId) {
+        $response->getBody()->write(json_encode(['error' => 'product_id is required']));
         return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
     }
 
+    // Fetch the product from Supabase
     $auth = new SupabaseAuth();
     $auth->setToken($request->getAttribute('token'));
+    $products = $auth->query('products', [
+        'id' => 'eq.' . $productId,
+        'select' => '*,categories(name)'
+    ]);
 
-    $name = '';
-    $category = 'Uncategorized';
-    $price = '0.00';
+    if (empty($products)) {
+        $response->getBody()->write(json_encode(['error' => 'Product not found']));
+        return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
+    }
+
+    $product = $products[0];
+    $categoryName = $product['categories']['name'] ?? 'General';
+
+    // Build prompt
+    $prompt = "Write a short product description (2-3 sentences) for a product called: " . $product['name'] . ". "
+            . "Category: " . $categoryName . ". "
+            . "Price: " . number_format((float)$product['price'], 2) . " EUR. "
+            . "Make it engaging and suitable for an e-commerce product listing.";
 
     try {
-        $products = $auth->query('products', [
-            'id' => 'eq.' . $productId,
-            'select' => 'name,price,categories(name)'
-        ]);
-
-        if (empty($products)) {
-            $response->getBody()->write(json_encode([
-                'error' => 'Product not found'
-            ]));
-            return $response->withStatus(404)->withHeader('Content-Type', 'application/json');
-        }
-
-        $product = $products[0];
-        if (isset($product['categories']['name'])) {
-            $category = (string)$product['categories']['name'];
-        } elseif (isset($product['categories'][0]['name'])) {
-            $category = (string)$product['categories'][0]['name'];
-        }
-
-        $name = trim((string)($product['name'] ?? 'Unknown product'));
-        $price = number_format((float)($product['price'] ?? 0), 2, '.', '');
-        $prompt = 'Write a 2-3 sentence product description for: ' . $name . '. Category: ' . $category . '. Price: ' . $price . ' EUR.';
-
         $ai = new GeminiAI();
         $description = $ai->ask($prompt);
 
@@ -118,28 +108,15 @@ $app->post('/api/ai/describe', function (Request $request, Response $response) u
             'description' => $description
         ]));
         return $response->withHeader('Content-Type', 'application/json');
-    } catch (\Throwable $e) {
-        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && $name !== '') {
-            $fallbackDescription = $name . ' is a ' . $category . ' product priced at ' . $price . ' EUR. '
-                . 'It offers reliable everyday performance and practical value for regular use. '
-                . 'This item is a strong choice for customers looking for quality at a balanced price point.';
 
-            $response->getBody()->write(json_encode([
-                'description' => $fallbackDescription,
-                'fallback' => true,
-                'reason' => 'quota_exceeded'
-            ]));
-            return $response->withHeader('Content-Type', 'application/json');
-        }
-
+    } catch (\Exception $e) {
         $response->getBody()->write(json_encode([
-            'error' => $e->getMessage()
+            'error' => 'AI generation failed: ' . $e->getMessage()
         ]));
         return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 
 })->add(new AuthMiddleware());
-
 
 // ============================================================
 // POST /api/ai/stock-advice — Get AI advice on stock levels
@@ -165,92 +142,58 @@ $app->post('/api/ai/describe', function (Request $request, Response $response) u
 // ============================================================
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 2).
-$app->post('/api/ai/stock-advice', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
+$app->post('/api/ai/stock-advice', function (Request $request, Response $response) {
+
     $auth = new SupabaseAuth();
     $auth->setToken($request->getAttribute('token'));
 
-    $lowStockProducts = [];
+    // Fetch all products
+    $products = $auth->query('products', [
+        'select' => 'name,stock_quantity,reorder_threshold',
+        'status' => 'eq.active'
+    ]);
+
+    // Filter to low-stock products in PHP
+    $lowStock = array_filter($products, function ($p) {
+        return (int)$p['stock_quantity'] <= (int)$p['reorder_threshold'];
+    });
+
+    if (empty($lowStock)) {
+        $response->getBody()->write(json_encode([
+            'advice' => 'All products are well-stocked. No reorders needed at this time.',
+            'products' => []
+        ]));
+        return $response->withHeader('Content-Type', 'application/json');
+    }
+
+    // Build prompt
+    $lines = [];
+    foreach ($lowStock as $p) {
+        $lines[] = "- " . $p['name'] . ": " . $p['stock_quantity'] . " in stock, threshold: " . $p['reorder_threshold'];
+    }
+
+    $prompt = "These products are running low on stock. For each, suggest a reorder quantity based on the current stock and threshold. Give a brief recommendation for each:\n\n"
+            . implode("\n", $lines)
+            . "\n\nKeep recommendations concise and practical.";
 
     try {
-        $products = $auth->query('products', [
-            'select' => 'id,name,sku,stock_quantity,reorder_threshold,price'
-        ]);
-
-        $lowStockProducts = array_values(array_filter($products, function ($product) {
-            $stockQuantity = (int)($product['stock_quantity'] ?? 0);
-            $reorderThreshold = (int)($product['reorder_threshold'] ?? 0);
-            return $stockQuantity <= $reorderThreshold;
-        }));
-
-        $lowStockProducts = array_map(function ($product) {
-            return [
-                'id' => $product['id'] ?? null,
-                'name' => (string)($product['name'] ?? ''),
-                'sku' => (string)($product['sku'] ?? ''),
-                'price' => number_format((float)($product['price'] ?? 0), 2, '.', ''),
-                'stock_quantity' => (int)($product['stock_quantity'] ?? 0),
-                'reorder_threshold' => (int)($product['reorder_threshold'] ?? 0),
-            ];
-        }, $lowStockProducts);
-
-        if (empty($lowStockProducts)) {
-            $response->getBody()->write(json_encode([
-                'advice' => 'All products are currently above their reorder thresholds.',
-                'products' => []
-            ]));
-            return $response->withHeader('Content-Type', 'application/json');
-        }
-
-        $itemsText = implode("\n", array_map(function ($product) {
-            return '- ' . $product['name'] . ': ' . $product['stock_quantity'] . ' in stock, threshold: ' . $product['reorder_threshold'];
-        }, $lowStockProducts));
-
-        $prompt = "These products are running low on stock. For each, suggest a reorder quantity based on the current stock and threshold:\n"
-            . $itemsText
-            . "\nGive a brief recommendation for each product.";
-
         $ai = new GeminiAI();
         $advice = $ai->ask($prompt);
 
         $response->getBody()->write(json_encode([
             'advice' => $advice,
-            'products' => $lowStockProducts
+            'products' => array_values($lowStock)
         ]));
         return $response->withHeader('Content-Type', 'application/json');
-    } catch (\Throwable $e) {
-        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && !empty($lowStockProducts)) {
-            $lines = array_map(function ($product) {
-                $stockQuantity = (int)($product['stock_quantity'] ?? 0);
-                $reorderThreshold = (int)($product['reorder_threshold'] ?? 0);
-                $deficit = max($reorderThreshold - $stockQuantity, 0);
-                $recommended = max($deficit + (int)ceil($reorderThreshold * 0.5), 1);
 
-                return '- ' . $product['name']
-                    . ': reorder about ' . $recommended
-                    . ' units (stock ' . $stockQuantity
-                    . ', threshold ' . $reorderThreshold . ')';
-            }, $lowStockProducts);
-
-            $fallbackAdvice = 'Gemini is currently unavailable due to quota limits. Suggested reorder quantities based on current thresholds:'
-                . "\n" . implode("\n", $lines);
-
-            $response->getBody()->write(json_encode([
-                'advice' => $fallbackAdvice,
-                'products' => $lowStockProducts,
-                'fallback' => true,
-                'reason' => 'quota_exceeded'
-            ]));
-            return $response->withHeader('Content-Type', 'application/json');
-        }
-
+    } catch (\Exception $e) {
         $response->getBody()->write(json_encode([
-            'error' => $e->getMessage()
+            'error' => 'AI generation failed: ' . $e->getMessage()
         ]));
         return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 
 })->add(new AuthMiddleware());
-
 
 // ============================================================
 // POST /api/ai/summarize-orders — Summarize recent orders
@@ -269,79 +212,48 @@ $app->post('/api/ai/stock-advice', function (Request $request, Response $respons
 // ============================================================
 
 // STUB: Returns "not implemented" until students implement Exercise 8 (Step 3).
-$app->post('/api/ai/summarize-orders', function (Request $request, Response $response) use ($isAiQuotaError, $aiFallbackEnabled) {
+$app->post('/api/ai/summarize-orders', function (Request $request, Response $response) {
+
     $auth = new SupabaseAuth();
     $auth->setToken($request->getAttribute('token'));
 
-    $orders = [];
+    // Fetch recent orders
+    $orders = $auth->query('orders', [
+        'select' => '*',
+        'order' => 'created_at.desc',
+        'limit' => 20
+    ]);
+
+    if (empty($orders)) {
+        $response->getBody()->write(json_encode([
+            'summary' => 'No orders found to summarize.'
+        ]));
+        return $response->withHeader('Content-Type', 'application/json');
+    }
+
+    // Build prompt with order data
+    $lines = [];
+    foreach ($orders as $o) {
+        $date = date('j M Y', strtotime($o['created_at']));
+        $lines[] = "- $date | " . $o['customer_name'] . " | Status: " . $o['status'] . " | Total: " . number_format((float)$o['total_amount'], 2) . " EUR";
+    }
+
+    $prompt = "Here are the recent orders for our inventory management system. Summarize the trends, identify any patterns, and provide a brief business insight:\n\n"
+            . implode("\n", $lines)
+            . "\n\nKeep the summary to 3-5 sentences.";
 
     try {
-        $sevenDaysAgo = gmdate('Y-m-d\TH:i:s\Z', strtotime('-7 days'));
-
-        $orders = $auth->query('orders', [
-            'select' => 'customer_name,status,total_amount,created_at',
-            'created_at' => 'gte.' . rawurlencode($sevenDaysAgo),
-            'order' => 'created_at.desc'
-        ]);
-
-        if (empty($orders)) {
-            $response->getBody()->write(json_encode([
-                'summary' => 'No orders found in the last 7 days.',
-                'orders' => []
-            ]));
-            return $response->withHeader('Content-Type', 'application/json');
-        }
-
-        $ordersText = implode("\n", array_map(function ($order) {
-            return '- Customer: ' . (string)($order['customer_name'] ?? 'Unknown')
-                . ', Total: ' . number_format((float)($order['total_amount'] ?? 0), 2, '.', '')
-                . ' EUR, Status: ' . (string)($order['status'] ?? 'unknown');
-        }, $orders));
-
-        $prompt = "Summarize the following recent orders from the last 7 days. Identify key trends, notable statuses, and any operational insights:\n"
-            . $ordersText;
-
         $ai = new GeminiAI();
         $summary = $ai->ask($prompt);
 
         $response->getBody()->write(json_encode([
-            'summary' => $summary,
-            'orders' => $orders
+            'summary' => $summary
         ]));
         return $response->withHeader('Content-Type', 'application/json');
-    } catch (\Throwable $e) {
-        if ($aiFallbackEnabled() && $isAiQuotaError($e->getMessage()) && !empty($orders)) {
-            $statusCounts = [];
-            $totalAmount = 0.0;
 
-            foreach ($orders as $order) {
-                $status = (string)($order['status'] ?? 'unknown');
-                $statusCounts[$status] = ($statusCounts[$status] ?? 0) + 1;
-                $totalAmount += (float)($order['total_amount'] ?? 0);
-            }
-
-            $orderCount = count($orders);
-            $averageAmount = $orderCount > 0 ? number_format($totalAmount / $orderCount, 2, '.', '') : '0.00';
-            arsort($statusCounts);
-            $topStatus = array_key_first($statusCounts) ?: 'unknown';
-            $topStatusCount = $statusCounts[$topStatus] ?? 0;
-
-            $fallbackSummary = 'Gemini is currently unavailable due to quota limits. '
-                . 'In the last 7 days there were ' . $orderCount . ' orders with total value '
-                . number_format($totalAmount, 2, '.', '') . ' EUR and average order value ' . $averageAmount . ' EUR. '
-                . 'The most common status is ' . $topStatus . ' (' . $topStatusCount . ' orders).';
-
-            $response->getBody()->write(json_encode([
-                'summary' => $fallbackSummary,
-                'orders' => $orders,
-                'fallback' => true,
-                'reason' => 'quota_exceeded'
-            ]));
-            return $response->withHeader('Content-Type', 'application/json');
-        }
-
+    } catch (\Exception $e) {
         $response->getBody()->write(json_encode([
-            'error' => $e->getMessage()
+            'error' => 'AI generation failed: ' . $e->getMessage()
         ]));
         return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }

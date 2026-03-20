@@ -12,9 +12,12 @@ h1 {
 table th,
 table td {
   padding: 8px 12px;
+  background-color: white;
 }
 
-input, select, textarea {
+input,
+select,
+textarea {
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid #555;
@@ -23,7 +26,9 @@ input, select, textarea {
   font-size: 0.9em;
 }
 
-input:focus, select:focus, textarea:focus {
+input:focus,
+select:focus,
+textarea:focus {
   outline: 2px solid #646cff;
   border-color: transparent;
 }

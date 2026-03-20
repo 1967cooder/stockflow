@@ -51,7 +51,6 @@ export default function Dashboard() {
       >
         <div
           style={{
-            backgroundColor: "transparent",
             padding: "15px",
             border: "1px solid #444",
             borderRadius: "8px",

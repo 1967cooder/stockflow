@@ -480,8 +480,7 @@ Then run the frontend normally with npm run dev.
 
 ## 12. Contacts
 
-- Main channel: GitHub Issues
-- Issues URL: https://github.com/1967cooder/stockflow/issues
+- [Portfolio] https://portfolio-react-silvana.netlify.app/
 
 ---
 
@@ -489,10 +488,49 @@ Then run the frontend normally with npm run dev.
 
 - [1967cooder (repository owner)](https://github.com/1967cooder?tab=repositories)
 - Project base: training course for PHP + React + Supabase
-- [Portfolio] https://portfolio-react-silvana.netlify.app/
 
 ---
 
 ## 14. GitHub
 
 - Repository: https://github.com/1967cooder/stockflow
+
+---
+
+## 15. Netlify Deployment (Frontend Only)
+
+Yes, this setup works with:
+
+- Frontend on Netlify
+- PHP API hosted separately (for example on Google Cloud)
+- Supabase for Auth/DB/Storage
+
+What is prepared in this repository:
+
+- root Netlify config: netlify.toml
+- frontend env example: stockflow/client/@/.env.example
+
+Netlify deploy steps:
+
+1. Connect this Git repository to Netlify.
+2. Netlify will use settings from netlify.toml:
+   - Base directory: stockflow/client/@
+   - Build command: npm run build
+   - Publish directory: dist
+3. In Netlify Site settings -> Environment variables, add:
+   - VITE_API_URL = https://your-api-domain.example.com/api
+4. Deploy.
+
+Required backend settings (important):
+
+1. In your hosted PHP API .env, set CLIENT_URL to your Netlify site URL.
+   - Example: CLIENT_URL=https://your-site-name.netlify.app
+2. In Supabase Authentication -> URL Configuration, add your Netlify callback URL:
+   - https://your-site-name.netlify.app/auth/callback
+3. In Google Cloud Console OAuth client, make sure Supabase callback remains authorized:
+   - https://YOUR_SUPABASE_PROJECT_REF.supabase.co/auth/v1/callback
+
+Notes:
+
+- Netlify does not run your PHP backend in this setup.
+- Your API must be publicly reachable over HTTPS for production use.

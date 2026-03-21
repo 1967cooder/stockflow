@@ -363,31 +363,31 @@ AI:
 
 ### Products
 
-![Products](client/@/public/products.png)
+![Products](stockflow/client/@/public/products.png)
 
 ### New Product
 
-![New Product](client/@/public/product.png)
+![New Product](stockflow/client/@/public/product.png)
 
 ### Orders
 
-![Orders](client/@/public/orders.png)
+![Orders](stockflow/client/@/public/orders.png)
 
 ### Orders (Mobile)
 
-![Orders Mobile](client/@/public/orders_mobile.png)
+![Orders Mobile](stockflow/client/@/public/orders_mobile.png)
 
 ### New Order
 
-![New Order](client/@/public/order.png)
+![New Order](stockflow/client/@/public/order.png)
 
 ### Stock
 
-![Stock](client/@/public/stock.png)
+![Stock](stockflow/client/@/public/stock.png)
 
 ### Dashboard
 
-![Dashboard](client/@/public/dashboard.png)
+![Dashboard](stockflow/client/@/public/dashboard.png)
 
 ---
 

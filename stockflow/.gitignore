@@ -5,3 +5,5 @@ api/vendor/
 
 client/node_modules/
 client/dist/
+
+.DS_Store

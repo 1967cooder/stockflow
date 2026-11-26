@@ -57,13 +57,13 @@ Open terminal 1:
 ```bash
 cd stockflow/api
 composer install
-php -S localhost:8005 -t public/
+php -S localhost:8006 -t public/
 ```
 
 Backend URL:
 
-- http://localhost:8005
-- API base path: http://localhost:8005/api
+- http://localhost:8006
+- API base path: http://localhost:8006/api
 
 ### 3.3 Start Frontend
 
@@ -97,7 +97,7 @@ Backend:
 ```bash
 cd stockflow/api
 composer install
-php -S localhost:8005 -t public/
+php -S localhost:8006 -t public/
 ```
 
 Alternative (from client/@):
@@ -116,7 +116,7 @@ api/.env should contain:
 ```env
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
-SITE_URL=http://localhost:8005
+SITE_URL=http://localhost:8006
 CLIENT_URL=http://localhost:5173
 GEMINI_API_KEY=
 # AI_FALLBACK_ENABLED=false
@@ -277,7 +277,7 @@ What to do:
 # Terminal 1
 cd stockflow/api
 composer install
-php -S localhost:8005 -t public/
+php -S localhost:8006 -t public/
 
 # Terminal 2
 cd stockflow/client/@
